@@ -1,9 +1,10 @@
 import json
+from datetime import timedelta
 
 import pytest
 from django_scopes import scope
 
-from eventyay.base.models import Schedule
+from eventyay.base.models import Room, Schedule, TalkSlot
 
 
 @pytest.fixture
@@ -574,6 +575,92 @@ def test_list_slots_orga_can_filter_by_schedule_pk(
     content = json.loads(response.text)
     assert response.status_code == 200
     assert content["count"] == 3
+
+
+@pytest.mark.django_db
+def test_list_slots_orga_can_filter_by_room(
+    client, orga_user_token, event, slot, room
+):
+    with scope(event=event):
+        other_room = Room.objects.create(event=event, name="Other Room", position=9)
+        other_slot = TalkSlot.objects.create(
+            schedule=slot.schedule,
+            submission=slot.submission,
+            room=other_room,
+            is_visible=True,
+            start=event.datetime_from,
+            end=event.datetime_from + timedelta(minutes=30),
+        )
+        wip_slot_pk = TalkSlot.objects.get(
+            submission=slot.submission, schedule=event.wip_schedule
+        ).pk
+
+    response = client.get(
+        event.api_urls.slots,
+        follow=True,
+        headers={"Authorization": f"Token {orga_user_token.token}"},
+    )
+    content = json.loads(response.text)
+    assert response.status_code == 200, content
+    # Without filters, the current-schedule default still applies and the
+    # wip slot is excluded.
+    assert set(s["id"] for s in content["results"]) == {slot.pk, other_slot.pk}
+    assert wip_slot_pk not in {s["id"] for s in content["results"]}
+
+    response = client.get(
+        event.api_urls.slots + f"?room={room.pk}",
+        follow=True,
+        headers={"Authorization": f"Token {orga_user_token.token}"},
+    )
+    content = json.loads(response.text)
+    assert response.status_code == 200, content
+    # Room filtering spans schedules; the other room's slot is excluded.
+    assert content["count"] == 2
+    assert slot.pk in [s["id"] for s in content["results"]]
+    assert other_slot.pk not in [s["id"] for s in content["results"]]
+
+    response = client.get(
+        event.api_urls.slots + f"?room={other_room.pk}",
+        follow=True,
+        headers={"Authorization": f"Token {orga_user_token.token}"},
+    )
+    content = json.loads(response.text)
+    assert response.status_code == 200, content
+    assert content["count"] == 1
+    assert content["results"][0]["id"] == other_slot.pk
+
+
+@pytest.mark.django_db
+def test_list_slots_orga_filter_invalid_room(client, orga_user_token, event):
+    response = client.get(
+        event.api_urls.slots + "?room=99999",
+        follow=True,
+        headers={"Authorization": f"Token {orga_user_token.token}"},
+    )
+    assert response.status_code == 400
+
+
+@pytest.mark.django_db
+def test_list_slots_orga_can_filter_by_schedule_version(
+    client, orga_user_token, event, slot, room
+):
+    with scope(event=event):
+        event.wip_schedule.freeze("v2-filter")
+        versioned_schedule = event.schedules.get(version="v2-filter")
+        expected_pks = set(
+            versioned_schedule.talks.values_list("pk", flat=True)
+        )
+        assert expected_pks
+
+    response = client.get(
+        event.api_urls.slots + "?schedule_version=v2-filter",
+        follow=True,
+        headers={"Authorization": f"Token {orga_user_token.token}"},
+    )
+    content = json.loads(response.text)
+    assert response.status_code == 200, content
+    assert content["count"] == len(expected_pks)
+    assert {s["id"] for s in content["results"]} == expected_pks
 
 
 @pytest.mark.django_db

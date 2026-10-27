@@ -189,6 +189,16 @@ def test_reviewer_can_filter_by_submission(
         event.active_review_phase.can_see_other_reviews = "always"
         event.active_review_phase.save()
     response = client.get(
+        event.api_urls.reviews,
+        follow=True,
+        headers={"Authorization": f"Token {review_user_token.token}"},
+    )
+    content = json.loads(response.text)
+
+    assert response.status_code == 200
+    assert content["count"] == 2
+
+    response = client.get(
         event.api_urls.reviews + f"?submission={review.submission.code}",
         follow=True,
         headers={"Authorization": f"Token {review_user_token.token}"},

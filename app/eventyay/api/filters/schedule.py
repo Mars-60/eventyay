@@ -19,8 +19,7 @@ with scopes_disabled():
             queryset=Schedule.objects.none(),
             field_name="schedule",
         )
-        schedule_version = django_filters.ModelChoiceFilter(
-            queryset=Schedule.objects.none(),
+        schedule_version = django_filters.CharFilter(
             field_name="schedule__version",
             lookup_expr="iexact",
         )
@@ -38,8 +37,7 @@ with scopes_disabled():
             super().__init__(*args, **kwargs)
             event = getattr(kwargs.get("request"), "event", None)
             if event:
-                for field in ("schedule", "schedule_version"):
-                    self.filters[field].queryset = event.schedules.all()
+                self.filters["schedule"].queryset = event.schedules.all()
                 self.filters["submission"].queryset = event.submissions.all()
                 self.filters["room"].queryset = rooms_for_talk_assignment(
                     event,
