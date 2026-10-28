@@ -2,9 +2,10 @@ import json
 from datetime import timedelta
 
 import pytest
-from django_scopes import scope
+from django_scopes import scope, scopes_disabled
 
-from eventyay.base.models import Room, Schedule, TalkSlot
+from eventyay.base.models import Room, Schedule, Submission, TalkSlot
+from eventyay.base.models.auth import User
 
 
 @pytest.fixture
@@ -638,6 +639,79 @@ def test_list_slots_orga_filter_invalid_room(client, orga_user_token, event):
         headers={"Authorization": f"Token {orga_user_token.token}"},
     )
     assert response.status_code == 400
+    assert "room" in response.json()
+
+
+@pytest.mark.django_db
+def test_list_slots_orga_can_filter_by_speaker(client, orga_user_token, event, slot):
+    with scope(event=event):
+        speaker_code = slot.submission.speakers.first().code
+        submission_code = slot.submission.code
+
+    response = client.get(
+        event.api_urls.slots + f"?speaker={speaker_code}",
+        follow=True,
+        headers={"Authorization": f"Token {orga_user_token.token}"},
+    )
+    content = json.loads(response.text)
+    assert response.status_code == 200, content
+    assert content["count"] >= 1
+    assert {s["submission"] for s in content["results"]} == {submission_code}
+
+
+@pytest.mark.django_db
+def test_list_slots_filter_unknown_speaker(client, orga_user_token, event):
+    response = client.get(
+        event.api_urls.slots + "?speaker=unknownguest",
+        follow=True,
+        headers={"Authorization": f"Token {orga_user_token.token}"},
+    )
+    assert response.status_code == 400
+    assert "speaker" in response.json()
+
+
+@pytest.mark.django_db
+def test_list_slots_cannot_filter_by_speaker_from_other_event(
+    client, orga_user_token, event, other_event
+):
+    with scopes_disabled():
+        outsider = User.objects.create_user(
+            password="outsiderpwd1!",
+            fullname="Outside Speaker",
+            email="outside@example.com",
+        )
+    with scope(event=other_event):
+        outside_submission = Submission.objects.create(
+            title="Talk in another event",
+            event=other_event,
+            submission_type=other_event.cfp.default_type,
+            description="Description",
+            abstract="Abstract",
+            notes="Notes",
+            content_locale="en",
+        )
+        outside_submission.speakers.add(outsider)
+
+    response = client.get(
+        event.api_urls.slots + f"?speaker={outsider.code}",
+        follow=True,
+        headers={"Authorization": f"Token {orga_user_token.token}"},
+    )
+    assert response.status_code == 400
+    assert "speaker" in response.json()
+
+
+@pytest.mark.django_db
+def test_list_slots_filter_by_room_of_unscheduled_room(client, event, room, break_slot):
+    with scope(event=event):
+        room.is_unscheduled = True
+        room.save()
+        break_slot_pk = break_slot.pk
+
+    response = client.get(event.api_urls.slots + f"?room={room.pk}", follow=True)
+    content = json.loads(response.text)
+    assert response.status_code == 200, content
+    assert break_slot_pk in [s["id"] for s in content["results"]]
 
 
 @pytest.mark.django_db

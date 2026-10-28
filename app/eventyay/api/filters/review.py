@@ -36,7 +36,7 @@ with scopes_disabled():
                 self.filters["user"].queryset = event.reviewers.all()
                 self.filters["speaker"].queryset = User.objects.filter(
                     submissions__in=submissions
-                )
+                ).distinct()
 
         class Meta:
             model = Review

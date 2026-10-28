@@ -4,7 +4,7 @@ from django_scopes import scopes_disabled
 from eventyay.base.models.auth import User
 from eventyay.base.models.schedule import Schedule
 from eventyay.base.models.slot import TalkSlot
-from eventyay.base.models.room import Room, rooms_for_talk_assignment
+from eventyay.base.models.room import Room
 from eventyay.base.models.submission import Submission
 
 with scopes_disabled():
@@ -39,10 +39,10 @@ with scopes_disabled():
             if event:
                 self.filters["schedule"].queryset = event.schedules.all()
                 self.filters["submission"].queryset = event.submissions.all()
-                self.filters["room"].queryset = rooms_for_talk_assignment(
-                    event,
-                    has_submission=True,
-                )
+                self.filters["speaker"].queryset = User.objects.filter(
+                    submissions__in=event.submissions.all()
+                ).distinct()
+                self.filters["room"].queryset = event.rooms.all()
 
         class Meta:
             model = TalkSlot

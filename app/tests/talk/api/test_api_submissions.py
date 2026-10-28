@@ -287,6 +287,7 @@ def test_submissions_filter_invalid_state(client, orga_user_token, event):
         headers={"Authorization": f"Token {orga_user_token.token}"},
     )
     assert response.status_code == 400
+    assert "state" in response.json()
 
 
 @pytest.mark.django_db
