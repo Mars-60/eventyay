@@ -9,6 +9,7 @@ from eventyay.base.models import Room
 from eventyay.base.models.stream_schedule import StreamSchedule
 from eventyay.base.services import room as room_service
 
+
 LOCMEM_CACHE = {
     'default': {
         'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
@@ -110,15 +111,14 @@ def test_stream_http_max_age_shrinks_to_the_slot_end():
     end = (now() + dt.timedelta(seconds=5)).isoformat()
     assert room_service.stream_http_max_age({'end_time': end}, 30, 'end_time') <= 5
     assert room_service.stream_http_max_age({'id': 1}, 30, 'end_time') == 30
-    assert room_service.stream_http_max_age(
-        {'end_time': '2026-02-30T10:00:00+00:00'}, 30, 'end_time'
-    ) == 30
+    assert room_service.stream_http_max_age({'end_time': '2026-02-30T10:00:00+00:00'}, 30, 'end_time') == 30
 
 
 @override_settings(CACHES=LOCMEM_CACHE)
 def test_ttl_lookup_database_error_keeps_the_loaded_stream():
     from django.core.cache import cache
     from django.db import DatabaseError
+
     from eventyay.base.services.stale_cache import get_stale_cached
 
     cache.clear()
@@ -394,6 +394,17 @@ def test_talk_slots_filter_key_includes_page():
     assert page1 != page2
 
 
+def test_talk_slots_filter_key_encodes_values_to_prevent_delimiter_collision():
+    from django.test import RequestFactory
+
+    from eventyay.base.services.stale_cache import talk_slots_filter_key
+
+    factory = RequestFactory()
+    key1 = talk_slots_filter_key(factory.get('/?schedule_version=v1|search=x'), ['schedule_version'])
+    key2 = talk_slots_filter_key(factory.get('/?schedule_version=v1&search=x'), ['schedule_version'])
+    assert key1 != key2
+
+
 def test_catalog_list_cache_skips_paginated_viewsets():
     from types import SimpleNamespace
 
@@ -448,6 +459,7 @@ def test_schedule_cache_invalidates_on_room_save(event):
 @override_settings(CACHES=LOCMEM_CACHE)
 def test_schedule_cache_skips_speaker_profile_without_released_slot(event, user):
     from unittest.mock import patch
+
     from django_scopes import scope
 
     from eventyay.base.models.profile import SpeakerProfile
@@ -463,6 +475,7 @@ def test_schedule_cache_skips_speaker_profile_without_released_slot(event, user)
 @override_settings(CACHES=LOCMEM_CACHE)
 def test_schedule_cache_invalidates_on_featured_speaker_without_released_slot(event, user):
     from unittest.mock import patch
+
     from django_scopes import scope
 
     from eventyay.base.models.profile import SpeakerProfile
@@ -478,6 +491,7 @@ def test_schedule_cache_invalidates_on_featured_speaker_without_released_slot(ev
 @override_settings(CACHES=LOCMEM_CACHE)
 def test_schedule_cache_invalidates_on_speaker_profile_save(event, user):
     from unittest.mock import patch
+
     from django_scopes import scope
 
     from eventyay.base.models import Schedule, Submission, SubmissionType, TalkSlot

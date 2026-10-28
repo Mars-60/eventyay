@@ -2,9 +2,11 @@ import hashlib
 import json
 import logging
 import threading
+import urllib.parse
 
 from django.core.cache import cache
 from django.db import DatabaseError, OperationalError, transaction
+
 
 logger = logging.getLogger(__name__)
 
@@ -225,9 +227,7 @@ def get_cached_catalog_list(event_id, catalog, locale_key, loader):
 
 
 def get_cached_schedule_detail(event_id, schedule_id, expand_key, user_scope, locale_key, loader):
-    hot_key, stale_key = schedule_detail_cache_keys(
-        event_id, schedule_id, expand_key, user_scope, locale_key
-    )
+    hot_key, stale_key = schedule_detail_cache_keys(event_id, schedule_id, expand_key, user_scope, locale_key)
 
     def wrapping_loader():
         return wrap_api_cache_payload(loader())
@@ -263,9 +263,7 @@ def get_cached_video_spa_schedule(event_id, schedule_id, featured_key, loader):
 
 
 def get_cached_talk_slots_list(event_id, user_scope, expand_key, filter_key, locale_key, loader):
-    hot_key, stale_key = talk_slots_list_cache_keys(
-        event_id, user_scope, expand_key, filter_key, locale_key
-    )
+    hot_key, stale_key = talk_slots_list_cache_keys(event_id, user_scope, expand_key, filter_key, locale_key)
 
     def wrapping_loader():
         return wrap_api_cache_payload(loader())
@@ -288,17 +286,17 @@ def talk_slots_filter_key(request, filter_fields):
     for field in sorted(filter_fields):
         value = params.get(field)
         if value is not None:
-            parts.append(f'{field}={value}')
+            parts.append(f'{field}={urllib.parse.quote(str(value), safe="")}')
     search = params.get('search')
     if search:
-        parts.append(f'search={search}')
+        parts.append(f'search={urllib.parse.quote(str(search), safe="")}')
     ordering = params.get('ordering')
     if ordering:
-        parts.append(f'ordering={ordering}')
+        parts.append(f'ordering={urllib.parse.quote(str(ordering), safe="")}')
     for key in ('page', 'page_size', 'limit', 'offset'):
         value = params.get(key)
         if value is not None:
-            parts.append(f'{key}={value}')
+            parts.append(f'{key}={urllib.parse.quote(str(value), safe="")}')
     if not any(params.get(key) is not None for key in ('page', 'page_size', 'limit', 'offset')):
         parts.append('page=1')
     if not parts:
