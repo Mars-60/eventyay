@@ -2,12 +2,14 @@ import datetime as dt
 from types import SimpleNamespace
 
 import pytest
+from django.test import RequestFactory
 from django.test.utils import override_settings
 from django.utils.timezone import now
 
 from eventyay.base.models import Room
 from eventyay.base.models.stream_schedule import StreamSchedule
 from eventyay.base.services import room as room_service
+from eventyay.base.services.stale_cache import talk_slots_filter_key
 
 
 LOCMEM_CACHE = {
@@ -373,10 +375,6 @@ def test_video_spa_schedule_cache_avoids_repeat_build():
 
 
 def test_talk_slots_filter_key_includes_ordering():
-    from django.test import RequestFactory
-
-    from eventyay.base.services.stale_cache import talk_slots_filter_key
-
     factory = RequestFactory()
     default = talk_slots_filter_key(factory.get('/'), ['room'])
     ordered = talk_slots_filter_key(factory.get('/?ordering=-start'), ['room'])
@@ -384,10 +382,6 @@ def test_talk_slots_filter_key_includes_ordering():
 
 
 def test_talk_slots_filter_key_includes_page():
-    from django.test import RequestFactory
-
-    from eventyay.base.services.stale_cache import talk_slots_filter_key
-
     factory = RequestFactory()
     page1 = talk_slots_filter_key(factory.get('/'), ['room'])
     page2 = talk_slots_filter_key(factory.get('/?page=2'), ['room'])
@@ -395,10 +389,6 @@ def test_talk_slots_filter_key_includes_page():
 
 
 def test_talk_slots_filter_key_encodes_values_to_prevent_delimiter_collision():
-    from django.test import RequestFactory
-
-    from eventyay.base.services.stale_cache import talk_slots_filter_key
-
     factory = RequestFactory()
     key1 = talk_slots_filter_key(factory.get('/?schedule_version=v1|search=x'), ['schedule_version'])
     key2 = talk_slots_filter_key(factory.get('/?schedule_version=v1&search=x'), ['schedule_version'])

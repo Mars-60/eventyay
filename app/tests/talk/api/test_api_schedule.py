@@ -738,6 +738,103 @@ def test_list_slots_orga_can_filter_by_schedule_version(
 
 
 @pytest.mark.django_db
+def test_list_slots_anonymous_cannot_enumerate_private_proposal_speaker(
+    client, orga_user_token, event
+):
+    with scopes_disabled():
+        private_speaker = User.objects.create_user(
+            password='privatespeakerpwd1!',
+            fullname='Private Speaker',
+            email='privatespeaker@example.com',
+        )
+    with scope(event=event):
+        private_submission = Submission.objects.create(
+            title='Private Rejected Proposal',
+            event=event,
+            submission_type=event.cfp.default_type,
+            description='Description',
+            abstract='Abstract',
+            notes='Notes',
+            content_locale='en',
+            state='rejected',
+        )
+        private_submission.speakers.add(private_speaker)
+
+    # Anonymous caller gets 400, unable to distinguish from non-existent speaker
+    response = client.get(
+        event.api_urls.slots + f'?speaker={private_speaker.code}',
+        follow=True,
+    )
+    assert response.status_code == 400
+    assert 'speaker' in response.json()
+
+    # Organizer retains access and can filter by this speaker
+    response = client.get(
+        event.api_urls.slots + f'?speaker={private_speaker.code}',
+        follow=True,
+        headers={'Authorization': f'Token {orga_user_token.token}'},
+    )
+    assert response.status_code == 200
+
+
+@pytest.mark.django_db
+def test_list_slots_anonymous_can_filter_by_public_speaker(client, event, slot):
+    with scope(event=event):
+        speaker_code = slot.submission.speakers.first().code
+
+    response = client.get(
+        event.api_urls.slots + f'?speaker={speaker_code}',
+        follow=True,
+    )
+    content = json.loads(response.text)
+    assert response.status_code == 200, content
+    assert content['count'] >= 1
+    assert slot.pk in [s['id'] for s in content['results']]
+
+
+@pytest.mark.django_db
+def test_list_slots_orga_can_filter_by_schedule_version_wip(
+    client, orga_user_token, event, slot
+):
+    with scope(event=event):
+        wip_pks = set(event.wip_schedule.talks.values_list('pk', flat=True))
+        assert wip_pks
+
+    response = client.get(
+        event.api_urls.slots + '?schedule_version=wip',
+        follow=True,
+        headers={'Authorization': f'Token {orga_user_token.token}'},
+    )
+    content = json.loads(response.text)
+    assert response.status_code == 200, content
+    assert content['count'] == len(wip_pks)
+    assert {s['id'] for s in content['results']} == wip_pks
+
+    # Case-insensitive "WIP"
+    response_upper = client.get(
+        event.api_urls.slots + '?schedule_version=WIP',
+        follow=True,
+        headers={'Authorization': f'Token {orga_user_token.token}'},
+    )
+    content_upper = json.loads(response_upper.text)
+    assert response_upper.status_code == 200, content_upper
+    assert content_upper['count'] == len(wip_pks)
+
+
+@pytest.mark.django_db
+def test_list_slots_anonymous_cannot_filter_by_schedule_version_wip(
+    client, event, slot
+):
+    response = client.get(
+        event.api_urls.slots + '?schedule_version=wip',
+        follow=True,
+    )
+    content = json.loads(response.text)
+    assert response.status_code == 200, content
+    assert content['count'] == 0
+
+
+@pytest.mark.django_db
 def test_retrieve_slot_anonymous_not_visible(client, event, invisible_slot):
     response = client.get(event.api_urls.slots + f"{invisible_slot.pk}/", follow=True)
     assert response.status_code == 404

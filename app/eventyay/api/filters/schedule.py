@@ -21,8 +21,7 @@ with scopes_disabled():
             field_name='schedule',
         )
         schedule_version = django_filters.CharFilter(
-            field_name='schedule__version',
-            lookup_expr='iexact',
+            method='filter_schedule_version',
         )
         speaker = django_filters.ModelChoiceFilter(
             queryset=User.objects.none(),
@@ -34,17 +33,50 @@ with scopes_disabled():
             field_name='room',
         )
 
+        def filter_schedule_version(self, queryset, name, value):
+            if not value:
+                return queryset
+            if value.strip().lower() == 'wip':
+                request = getattr(self, 'request', None)
+                event = getattr(request, 'event', None)
+                is_orga = bool(
+                    request
+                    and getattr(request, 'user', None)
+                    and event
+                    and request.user.has_perm('base.orga_view_schedule', event)
+                )
+                if not is_orga:
+                    return queryset.none()
+                return queryset.filter(schedule__version__isnull=True)
+            return queryset.filter(schedule__version__iexact=value.strip())
+
         def __init__(self, *args, event=None, **kwargs):
             super().__init__(*args, **kwargs)
-            event = getattr(kwargs.get('request'), 'event', None)
+            request = getattr(self, 'request', None) or kwargs.get('request')
+            event = event or getattr(request, 'event', None)
             if event:
                 with scope(event=event):
                     self.filters['schedule'].queryset = event.schedules.all()
                     self.filters['submission'].queryset = event.submissions.all()
-                    self.filters['speaker'].queryset = User.objects.filter(
-                        submissions__in=event.submissions.all()
-                    ).distinct()
                     self.filters['room'].queryset = event.rooms.all()
+
+                    is_orga = bool(
+                        request
+                        and getattr(request, 'user', None)
+                        and request.user.has_perm('base.orga_view_schedule', event)
+                    )
+                    if is_orga:
+                        self.filters['speaker'].queryset = User.objects.filter(
+                            submissions__in=event.submissions.all()
+                        ).distinct()
+                    else:
+                        visible_submissions = event.submissions.filter(
+                            slots__is_visible=True,
+                            slots__schedule__version__isnull=False,
+                        ).exclude(slots__room__deleted=True)
+                        self.filters['speaker'].queryset = User.objects.filter(
+                            submissions__in=visible_submissions
+                        ).distinct()
 
         class Meta:
             model = TalkSlot
