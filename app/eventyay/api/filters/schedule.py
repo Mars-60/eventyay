@@ -1,4 +1,5 @@
 import django_filters
+from django.db.models import Q
 from django_scopes import scope, scopes_disabled
 
 from eventyay.base.models.auth import User
@@ -71,9 +72,9 @@ with scopes_disabled():
                         ).distinct()
                     else:
                         visible_submissions = event.submissions.filter(
-                            slots__is_visible=True,
-                            slots__schedule__version__isnull=False,
-                        ).exclude(slots__room__deleted=True)
+                            Q(slots__is_visible=True, slots__schedule__version__isnull=False)
+                            & (Q(slots__room__isnull=True) | Q(slots__room__deleted=False))
+                        )
                         self.filters['speaker'].queryset = User.objects.filter(
                             submissions__in=visible_submissions
                         ).distinct()

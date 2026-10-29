@@ -793,6 +793,70 @@ def test_list_slots_anonymous_can_filter_by_public_speaker(client, event, slot):
 
 
 @pytest.mark.django_db
+def test_list_slots_anonymous_can_filter_by_speaker_with_deleted_room_slot(client, event, slot):
+    with scope(event=event):
+        deleted_room = Room.objects.create(event=event, name='Removed room', deleted=True)
+        # The WIP slot is non-public because its schedule has no version. Its
+        # deleted room must not hide the released public slot of the same talk.
+        updated = TalkSlot.objects.filter(
+            submission=slot.submission,
+            schedule__version__isnull=True,
+        ).update(room=deleted_room)
+        assert updated > 0
+        speaker_code = slot.submission.speakers.first().code
+        public_slot_pk = slot.pk
+
+    response = client.get(event.api_urls.slots + f'?speaker={speaker_code}', follow=True)
+    content = json.loads(response.text)
+    assert response.status_code == 200, content
+    assert public_slot_pk in [s['id'] for s in content['results']]
+
+
+@pytest.mark.django_db
+def test_list_slots_anonymous_cannot_enumerate_speaker_with_only_deleted_room_slots(client, event, slot):
+    with scope(event=event):
+        deleted_room = Room.objects.create(event=event, name='Removed room', deleted=True)
+        updated = TalkSlot.objects.filter(submission=slot.submission).update(room=deleted_room)
+        assert updated > 0
+        speaker_code = slot.submission.speakers.first().code
+
+    response = client.get(event.api_urls.slots + f'?speaker={speaker_code}', follow=True)
+    assert response.status_code == 400
+    assert 'speaker' in response.json()
+
+
+@pytest.mark.django_db
+def test_list_slots_anonymous_can_filter_by_speaker_with_unassigned_room(client, event, slot):
+    with scope(event=event):
+        updated = TalkSlot.objects.filter(pk=slot.pk).update(room=None)
+        assert updated > 0
+        speaker_code = slot.submission.speakers.first().code
+        public_slot_pk = slot.pk
+
+    response = client.get(event.api_urls.slots + f'?speaker={speaker_code}', follow=True)
+    content = json.loads(response.text)
+    assert response.status_code == 200, content
+    assert public_slot_pk in [s['id'] for s in content['results']]
+
+
+@pytest.mark.django_db
+def test_list_slots_orga_can_filter_by_speaker_with_only_deleted_room_slots(client, orga_user_token, event, slot):
+    with scope(event=event):
+        deleted_room = Room.objects.create(event=event, name='Removed room', deleted=True)
+        updated = TalkSlot.objects.filter(submission=slot.submission).update(room=deleted_room)
+        assert updated > 0
+        speaker_code = slot.submission.speakers.first().code
+
+    response = client.get(
+        event.api_urls.slots + f'?speaker={speaker_code}',
+        follow=True,
+        headers={'Authorization': f'Token {orga_user_token.token}'},
+    )
+    content = json.loads(response.text)
+    assert response.status_code == 200, content
+
+
+@pytest.mark.django_db
 def test_list_slots_orga_can_filter_by_schedule_version_wip(
     client, orga_user_token, event, slot
 ):
