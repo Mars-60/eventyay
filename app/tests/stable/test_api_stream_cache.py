@@ -396,6 +396,85 @@ def test_talk_slots_filter_key_encodes_values_to_prevent_delimiter_collision():
     assert key1 != key2
 
 
+def _legacy_talk_slots_key(event_id, suffix):
+    from eventyay.base.services.stale_cache import get_schedule_cache_version
+
+    version = get_schedule_cache_version(event_id)
+    return f'api:talk-slots:{event_id}:v{version}:public:all::default:{suffix}'
+
+
+@override_settings(CACHES=LOCMEM_CACHE)
+def test_talk_slots_cache_keys_include_schema_discriminator():
+    from eventyay.base.services.stale_cache import (
+        TALK_SLOTS_CACHE_SCHEMA,
+        talk_slots_list_cache_keys,
+    )
+
+    hot, stale = talk_slots_list_cache_keys(7, 'public', '', 'default', 'all')
+    schema_segment = f':s{TALK_SLOTS_CACHE_SCHEMA}:'
+
+    assert schema_segment in hot
+    assert schema_segment in stale
+    assert hot != stale
+
+
+@override_settings(CACHES=LOCMEM_CACHE)
+def test_talk_slots_cache_ignores_legacy_hot_entry():
+    from django.core.cache import cache
+
+    from eventyay.base.services.stale_cache import (
+        get_cached_talk_slots_list,
+        wrap_api_cache_payload,
+    )
+
+    cache.clear()
+    event_id = 11
+    cache.set(
+        _legacy_talk_slots_key(event_id, 'hot'),
+        wrap_api_cache_payload([{'id': 'legacy'}]),
+        300,
+    )
+    calls = []
+
+    def loader():
+        calls.append(1)
+        return [{'id': 'fresh'}]
+
+    data, etag = get_cached_talk_slots_list(event_id, 'public', '', 'default', 'all', loader)
+
+    assert data == [{'id': 'fresh'}]
+    assert etag
+    assert calls == [1]
+
+
+@override_settings(CACHES=LOCMEM_CACHE)
+def test_talk_slots_cache_ignores_legacy_stale_entry_on_db_error():
+    from django.core.cache import cache
+    from django.db import DatabaseError
+
+    from eventyay.base.services.stale_cache import (
+        get_cached_talk_slots_list,
+        wrap_api_cache_payload,
+    )
+
+    cache.clear()
+    event_id = 12
+    cache.set(
+        _legacy_talk_slots_key(event_id, 'stale'),
+        wrap_api_cache_payload([{'id': 'legacy'}]),
+        3600,
+    )
+
+    def loader():
+        raise DatabaseError('database unavailable')
+
+    # get_stale_cached() re-raises the original error when neither the current
+    # hot key nor the current stale key exists. The legacy stale key must not
+    # be used as a fallback.
+    with pytest.raises(DatabaseError):
+        get_cached_talk_slots_list(event_id, 'public', '', 'default', 'all', loader)
+
+
 def test_catalog_list_cache_skips_paginated_viewsets():
     from types import SimpleNamespace
 

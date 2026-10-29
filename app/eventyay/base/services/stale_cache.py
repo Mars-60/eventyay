@@ -19,6 +19,11 @@ CATALOG_STALE_TTL = 3600
 SCHEDULE_HOT_TTL = 300
 SCHEDULE_STALE_TTL = 3600
 
+# Bump this whenever the cached talk-slot payload shape or key layout changes.
+# It makes hot and stale keys from older code unreachable instead of serving
+# them as if they were produced by the current serializer.
+TALK_SLOTS_CACHE_SCHEMA = 1
+
 CATALOG_NAMES = ('tracks', 'tags', 'submission-types')
 
 
@@ -185,7 +190,10 @@ def schedule_detail_cache_keys(event_id, schedule_id, expand_key, user_scope, lo
 
 def talk_slots_list_cache_keys(event_id, user_scope, expand_key, filter_key, locale_key='all'):
     version = get_schedule_cache_version(event_id)
-    prefix = f'api:talk-slots:{event_id}:v{version}:{user_scope}:{locale_key}:{expand_key}:{filter_key}'
+    prefix = (
+        f'api:talk-slots:{event_id}:s{TALK_SLOTS_CACHE_SCHEMA}:v{version}:'
+        f'{user_scope}:{locale_key}:{expand_key}:{filter_key}'
+    )
     return f'{prefix}:hot', f'{prefix}:stale'
 
 
