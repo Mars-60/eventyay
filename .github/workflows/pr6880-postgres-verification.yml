@@ -1,0 +1,66 @@
+name: "PR #6880 PostgreSQL Test Verification"
+
+on:
+  push:
+    branches:
+      - "verify/*"
+      - "test/*"
+      - "ci-verify-pr6880"
+  workflow_dispatch:
+
+env:
+  PYTHON_VERSION: "3.12"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Run talk API tests against PostgreSQL
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: eventyay
+          POSTGRES_PASSWORD: eventyay
+          POSTGRES_DB: eventyay-db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U eventyay -d eventyay-db"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install system packages (gettext + postgresql-client)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gettext postgresql-client
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Sync dependencies (test group)
+        run: uv sync --directory app --group test
+
+      - name: Run talk API tests
+        env:
+          EVY_POSTGRES_USER: eventyay
+          EVY_POSTGRES_PASSWORD: eventyay
+          EVY_POSTGRES_DB: eventyay-db
+          EVY_POSTGRES_HOST: localhost
+          EVY_POSTGRES_PORT: "5432"
+          EVY_SECRET_KEY: ci-test-secret-key
+          EVY_DEBUG: "true"
+          EVY_RUNNING_ENVIRONMENT: testing
+          GITHUB_WORKFLOW: "true"
+        working-directory: app
+        run: uv run pytest tests/talk/api/test_api_schedule.py tests/talk/api/test_api_reviews.py -v --tb=short
