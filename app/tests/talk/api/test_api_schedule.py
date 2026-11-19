@@ -5,7 +5,7 @@ import pytest
 from django_scopes import scope
 
 from eventyay.api.filters.schedule import TalkSlotFilter
-from eventyay.base.models import Room, Schedule, TalkSlot
+from eventyay.base.models import Room, Schedule, Submission, TalkSlot
 
 
 @pytest.fixture
@@ -993,9 +993,18 @@ def test_talk_slot_filter_fallback_and_direct_instantiation(
             start=event.datetime_from,
             end=event.datetime_from + timedelta(minutes=30),
         )
+        invisible_current_slot = TalkSlot.objects.create(
+            schedule=event.current_schedule,
+            submission=slot.submission,
+            room=room,
+            is_visible=False,
+            start=event.datetime_from + timedelta(minutes=35),
+            end=event.datetime_from + timedelta(minutes=65),
+        )
         assert current_slot is not None
         assert wip_slot is not None
         assert old_slot is not None
+        assert invisible_current_slot is not None
 
     # 1. Non-schedule filters remain restricted to current schedule
     # Room filter excludes historical and WIP slots
@@ -1020,7 +1029,7 @@ def test_talk_slot_filter_fallback_and_direct_instantiation(
     assert content["count"] == 1
     assert content["results"][0]["id"] == current_slot.pk
 
-    # is_visible filter excludes historical and WIP slots
+    # is_visible filter excludes historical, WIP, and invisible current slots
     response = client.get(
         event.api_urls.slots + "?is_visible=true",
         follow=True,
@@ -1030,8 +1039,22 @@ def test_talk_slot_filter_fallback_and_direct_instantiation(
     assert response.status_code == 200, content
     returned_ids = [s["id"] for s in content["results"]]
     assert current_slot.pk in returned_ids
+    assert invisible_current_slot.pk not in returned_ids
     assert wip_slot.pk not in returned_ids
     assert old_slot.pk not in returned_ids
+
+    # Empty schedule_version falls back to current schedule
+    response_empty = client.get(
+        event.api_urls.slots + "?schedule_version=",
+        follow=True,
+        headers={"Authorization": f"Token {orga_user_token.token}"},
+    )
+    content_empty = json.loads(response_empty.text)
+    assert response_empty.status_code == 200, content_empty
+    returned_empty = [s["id"] for s in content_empty["results"]]
+    assert current_slot.pk in returned_empty
+    assert old_slot.pk not in returned_empty
+    assert wip_slot.pk not in returned_empty
 
     # 2. Explicit schedule filters bypass current schedule fallback
     response = client.get(
@@ -1041,7 +1064,7 @@ def test_talk_slot_filter_fallback_and_direct_instantiation(
     )
     content = json.loads(response.text)
     assert response.status_code == 200, content
-    assert old_slot.pk in [s["id"] for s in content["results"]]
+    assert {s["id"] for s in content["results"]} == {old_slot.pk}
 
     response = client.get(
         event.api_urls.slots + "?schedule_version=v1.0",
@@ -1050,7 +1073,7 @@ def test_talk_slot_filter_fallback_and_direct_instantiation(
     )
     content = json.loads(response.text)
     assert response.status_code == 200, content
-    assert old_slot.pk in [s["id"] for s in content["results"]]
+    assert {s["id"] for s in content["results"]} == {old_slot.pk}
 
     # 3. Anonymous ?schedule=<wip_pk> returns NO WIP slots
     response = client.get(
@@ -1084,3 +1107,107 @@ def test_talk_slot_filter_fallback_and_direct_instantiation(
         assert f.filters["submission"].queryset.count() == event.submissions.count()
         assert f.filters["room"].queryset.count() == event.rooms.count()
         assert old_slot in f.qs
+
+
+@pytest.mark.django_db
+def test_list_slots_team_api_token_wip_access(
+    client, event, slot
+):
+    from eventyay.base.models import Team, TeamAPIToken
+
+    with scope(event=event):
+        organizer = getattr(event, "organizer", None)
+        team_auth = Team.objects.create(
+            organizer=organizer,
+            name="Submission Editors",
+            can_change_submissions=True,
+            all_events=True,
+        )
+        token_auth = TeamAPIToken.objects.create(team=team_auth, name="Editor Token")
+        wip_pks = set(event.wip_schedule.talks.values_list("pk", flat=True))
+        assert wip_pks
+
+        team_unauth = Team.objects.create(
+            organizer=organizer,
+            name="Read Only Team",
+            can_change_submissions=False,
+            all_events=True,
+        )
+        token_unauth = TeamAPIToken.objects.create(team=team_unauth, name="Unauth Token")
+
+    # 1. Authorized token receives WIP slots
+    response = client.get(
+        event.api_urls.slots + "?schedule_version=wip",
+        follow=True,
+        headers={"Authorization": f"Token {token_auth.token}"},
+    )
+    content = json.loads(response.text)
+    assert response.status_code == 200, content
+    assert content["count"] == len(wip_pks)
+    assert {s["id"] for s in content["results"]} == wip_pks
+
+    # 2. Unauthorized token receives 0 WIP slots
+    response = client.get(
+        event.api_urls.slots + "?schedule_version=wip",
+        follow=True,
+        headers={"Authorization": f"Token {token_unauth.token}"},
+    )
+    assert response.status_code == 200, response.text
+    content = json.loads(response.text)
+    assert content["count"] == 0
+    assert content["results"] == []
+
+
+@pytest.mark.django_db
+def test_talk_slot_filter_anonymous_cannot_enumerate_private_submissions(
+    client, event, slot, orga_user_token
+):
+    with scope(event=event):
+        private_sub = Submission.objects.create(
+            event=event,
+            title="Private Draft Talk",
+            submission_type=event.cfp.default_type,
+        )
+        private_slot = TalkSlot.objects.create(
+            schedule=event.wip_schedule,
+            submission=private_sub,
+            room=slot.room,
+            is_visible=True,
+            start=slot.start,
+            end=slot.end,
+        )
+
+    # 1. Anonymous filtering by visible slot submission succeeds
+    response_vis = client.get(
+        event.api_urls.slots + f"?submission={slot.submission.code}",
+        follow=True,
+    )
+    assert response_vis.status_code == 200
+    content_vis = json.loads(response_vis.text)
+    assert slot.pk in [s["id"] for s in content_vis["results"]]
+
+    # 2. Anonymous filtering by private submission without visible slot returns 400
+    response_priv = client.get(
+        event.api_urls.slots + f"?submission={private_sub.code}",
+        follow=True,
+    )
+    assert response_priv.status_code == 400
+    assert "submission" in response_priv.json()
+
+    # 3. Anonymous filtering by non-existent submission returns 400 identically
+    response_nonexist = client.get(
+        event.api_urls.slots + "?submission=NONEXISTENT123",
+        follow=True,
+    )
+    assert response_nonexist.status_code == 400
+    assert "submission" in response_nonexist.json()
+
+    # 4. Organizer can filter by private submission and retrieves exact slot
+    response_orga = client.get(
+        event.api_urls.slots + f"?submission={private_sub.code}&schedule_version=wip",
+        follow=True,
+        headers={"Authorization": f"Token {orga_user_token.token}"},
+    )
+    assert response_orga.status_code == 200
+    content_orga = json.loads(response_orga.text)
+    assert {s["id"] for s in content_orga["results"]} == {private_slot.pk}
