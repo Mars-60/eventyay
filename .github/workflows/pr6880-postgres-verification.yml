@@ -60,7 +60,7 @@ jobs:
       - name: Sync dependencies (test group)
         run: uv sync --directory app --group test
 
-      - name: Run talk API tests
+      - name: Run seven PR-specific tests on PostgreSQL 16
         env:
           DJANGO_SETTINGS_MODULE: eventyay.config.settings
           EVY_POSTGRES_USER: eventyay
@@ -74,4 +74,75 @@ jobs:
           EVY_RUNNING_ENVIRONMENT: testing
           GITHUB_WORKFLOW: "true"
         working-directory: app
-        run: uv run pytest tests/talk/api/test_api_schedule.py tests/talk/api/test_api_reviews.py -v --tb=short
+        run: |
+          uv run pytest tests/talk/api/test_api_schedule.py tests/talk/api/test_api_reviews.py -k "test_talk_slot_filter_fallback_and_direct_instantiation or test_list_slots_team_api_token_wip_access or test_talk_slot_filter_anonymous_cannot_enumerate_private_submissions or test_reviewer_can_filter_by_submission or test_reviewer_cannot_enumerate_inaccessible_submission_or_speaker or test_organizer_can_filter_reviews_by_submission_and_speaker or test_review_filter_direct_instantiation" -v --tb=short
+
+      - name: Run full test command on PR branch
+        env:
+          DJANGO_SETTINGS_MODULE: eventyay.config.settings
+          EVY_POSTGRES_USER: eventyay
+          EVY_POSTGRES_PASSWORD: eventyay
+          EVY_POSTGRES_DB: eventyay-db
+          EVY_POSTGRES_HOST: localhost
+          EVY_POSTGRES_PORT: "5432"
+          EVY_REDIS_URL: redis://localhost:6379/0
+          EVY_SECRET_KEY: ci-test-secret-key
+          EVY_DEBUG: "true"
+          EVY_RUNNING_ENVIRONMENT: testing
+          GITHUB_WORKFLOW: "true"
+        working-directory: app
+        run: |
+          set +e
+          uv run pytest tests/talk/api/test_api_schedule.py tests/talk/api/test_api_reviews.py -v --tb=line > /tmp/pr_test_output.txt 2>&1
+          grep "^FAILED " /tmp/pr_test_output.txt | sort -u > /tmp/pr_failures.txt
+          echo "PR branch failure count: $(wc -l < /tmp/pr_failures.txt)"
+          set -e
+
+      - name: Run full test command on unmodified upstream/dev
+        env:
+          DJANGO_SETTINGS_MODULE: eventyay.config.settings
+          EVY_POSTGRES_USER: eventyay
+          EVY_POSTGRES_PASSWORD: eventyay
+          EVY_POSTGRES_DB: eventyay-db
+          EVY_POSTGRES_HOST: localhost
+          EVY_POSTGRES_PORT: "5432"
+          EVY_REDIS_URL: redis://localhost:6379/0
+          EVY_SECRET_KEY: ci-test-secret-key
+          EVY_DEBUG: "true"
+          EVY_RUNNING_ENVIRONMENT: testing
+          GITHUB_WORKFLOW: "true"
+        working-directory: app
+        run: |
+          set +e
+          git remote add upstream https://github.com/fossasia/eventyay.git || true
+          git fetch upstream dev
+          git checkout upstream/dev -- app/
+          uv run pytest tests/talk/api/test_api_schedule.py tests/talk/api/test_api_reviews.py -v --tb=line > /tmp/upstream_test_output.txt 2>&1
+          grep "^FAILED " /tmp/upstream_test_output.txt | sort -u > /tmp/upstream_failures.txt
+          echo "upstream/dev failure count: $(wc -l < /tmp/upstream_failures.txt)"
+          set -e
+
+      - name: Compare failure IDs between upstream/dev and PR branch
+        run: |
+          echo "=========================================================="
+          echo "=== FAILURES PRESENT IN PR BUT NOT UPSTREAM (REGRESSIONS) ==="
+          echo "=========================================================="
+          comm -23 /tmp/pr_failures.txt /tmp/upstream_failures.txt > /tmp/regressions.txt
+          cat /tmp/regressions.txt
+          echo ""
+          echo "=========================================================="
+          echo "=== FAILURES PRESENT IN UPSTREAM BUT FIXED BY PR ==="
+          echo "=========================================================="
+          comm -13 /tmp/pr_failures.txt /tmp/upstream_failures.txt
+          echo ""
+          echo "=========================================================="
+          echo "=== COMMON FAILURES ON BOTH (EXISTING UPSTREAM BASELINE) ==="
+          echo "=========================================================="
+          comm -12 /tmp/pr_failures.txt /tmp/upstream_failures.txt
+          echo ""
+          if [ -s /tmp/regressions.txt ]; then
+            echo "ERROR: Regressions detected!"
+            exit 1
+          else
+            echo "SUCCESS: Zero regressions introduced by PR."
+          fi

@@ -11,6 +11,7 @@ from eventyay.base.models import (
     ReviewScore,
     ReviewScoreCategory,
     Submission,
+    User,
 )
 
 
@@ -618,42 +619,55 @@ def test_reviewer_cannot_enumerate_inaccessible_submission_or_speaker(
         event.active_review_phase.can_see_other_reviews = "always"
         event.active_review_phase.save()
         # Create an inaccessible submission (authored by the reviewer, so review is excluded)
+        inaccessible_speaker = User.objects.create(
+            email="inaccessible_speaker@example.com",
+            name="Inaccessible Speaker",
+        )
         inaccessible_sub = Submission.objects.create(
             event=event,
             title="Own submission cannot be reviewed",
             submission_type=event.cfp.default_type,
         )
         inaccessible_sub.speakers.add(review_user)
+        inaccessible_sub.speakers.add(inaccessible_speaker)
 
-    # 1. Inaccessible submission returns empty results (no reviews exposed)
+    # 1. Inaccessible submission returns 400 (choice validation failure)
     response_inaccessible = client.get(
         event.api_urls.reviews + f"?submission={inaccessible_sub.code}",
         follow=True,
         headers={"Authorization": f"Token {review_user_token.token}"},
     )
-    assert response_inaccessible.status_code == 200
-    assert response_inaccessible.json()["count"] == 0
-    assert response_inaccessible.json()["results"] == []
+    assert response_inaccessible.status_code == 400
+    assert "submission" in response_inaccessible.json()
 
-    # 2. Non-existent submission returns empty results identically (no oracle)
+    # 2. Non-existent submission returns 400 identically (no oracle)
     response_nonexistent = client.get(
         event.api_urls.reviews + "?submission=NONEXIST99",
         follow=True,
         headers={"Authorization": f"Token {review_user_token.token}"},
     )
-    assert response_nonexistent.status_code == 200
-    assert response_nonexistent.json()["count"] == 0
-    assert response_nonexistent.json()["results"] == []
+    assert response_nonexistent.status_code == 400
+    assert "submission" in response_nonexistent.json()
+    assert response_inaccessible.json() == response_nonexistent.json()
 
-    # 3. Non-existent speaker returns empty results identically
+    # 3. Existing but inaccessible speaker returns 400 (choice validation failure)
+    response_inaccessible_speaker = client.get(
+        event.api_urls.reviews + f"?speaker={inaccessible_speaker.code}",
+        follow=True,
+        headers={"Authorization": f"Token {review_user_token.token}"},
+    )
+    assert response_inaccessible_speaker.status_code == 400
+    assert "speaker" in response_inaccessible_speaker.json()
+
+    # 4. Non-existent speaker returns 400 identically (no oracle)
     response_speaker = client.get(
         event.api_urls.reviews + "?speaker=NOSUCHSPEAKER",
         follow=True,
         headers={"Authorization": f"Token {review_user_token.token}"},
     )
-    assert response_speaker.status_code == 200
-    assert response_speaker.json()["count"] == 0
-    assert response_speaker.json()["results"] == []
+    assert response_speaker.status_code == 400
+    assert "speaker" in response_speaker.json()
+    assert response_inaccessible_speaker.json() == response_speaker.json()
 
 
 @pytest.mark.django_db

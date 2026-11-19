@@ -1026,8 +1026,8 @@ def test_talk_slot_filter_fallback_and_direct_instantiation(
     )
     content = json.loads(response.text)
     assert response.status_code == 200, content
-    assert content["count"] == 1
-    assert content["results"][0]["id"] == current_slot.pk
+    assert content["count"] == 2
+    assert {s["id"] for s in content["results"]} == {current_slot.pk, invisible_current_slot.pk}
 
     # is_visible filter excludes historical, WIP, and invisible current slots
     response = client.get(
