@@ -53,6 +53,7 @@ jobs:
 
       - name: Run talk API tests
         env:
+          DJANGO_SETTINGS_MODULE: eventyay.config.settings
           EVY_POSTGRES_USER: eventyay
           EVY_POSTGRES_PASSWORD: eventyay
           EVY_POSTGRES_DB: eventyay-db
