@@ -33,13 +33,22 @@ jobs:
           --health-interval=10s
           --health-timeout=5s
           --health-retries=5
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
     steps:
       - uses: actions/checkout@v7
 
-      - name: Install system packages (gettext + postgresql-client)
+      - name: Install system packages (gettext + postgresql-client + redis-tools)
         run: |
           sudo apt-get update
-          sudo apt-get install -y gettext postgresql-client
+          sudo apt-get install -y gettext postgresql-client redis-tools
 
       - uses: actions/setup-python@v7
         with:
@@ -59,6 +68,7 @@ jobs:
           EVY_POSTGRES_DB: eventyay-db
           EVY_POSTGRES_HOST: localhost
           EVY_POSTGRES_PORT: "5432"
+          EVY_REDIS_URL: redis://localhost:6379/0
           EVY_SECRET_KEY: ci-test-secret-key
           EVY_DEBUG: "true"
           EVY_RUNNING_ENVIRONMENT: testing
