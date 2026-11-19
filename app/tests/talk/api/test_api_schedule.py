@@ -996,7 +996,7 @@ def test_talk_slot_filter_fallback_and_direct_instantiation(
         invisible_current_slot = TalkSlot.objects.create(
             schedule=event.current_schedule,
             submission=slot.submission,
-            room=room,
+            room=None,
             is_visible=False,
             start=event.datetime_from + timedelta(minutes=35),
             end=event.datetime_from + timedelta(minutes=65),
