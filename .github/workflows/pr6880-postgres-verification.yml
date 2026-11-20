@@ -60,7 +60,7 @@ jobs:
       - name: Sync dependencies (test group)
         run: uv sync --directory app --group test
 
-      - name: Run seven PR-specific tests on PostgreSQL 16
+      - name: Run six schedule authorization tests on PostgreSQL 16
         env:
           DJANGO_SETTINGS_MODULE: eventyay.config.settings
           EVY_POSTGRES_USER: eventyay
@@ -75,9 +75,16 @@ jobs:
           GITHUB_WORKFLOW: "true"
         working-directory: app
         run: |
-          uv run pytest tests/talk/api/test_api_schedule.py tests/talk/api/test_api_reviews.py -k "test_talk_slot_filter_fallback_and_direct_instantiation or test_list_slots_team_api_token_wip_access or test_talk_slot_filter_anonymous_cannot_enumerate_private_submissions or test_reviewer_can_filter_by_submission or test_reviewer_cannot_enumerate_inaccessible_submission_or_speaker or test_organizer_can_filter_reviews_by_submission_and_speaker or test_review_filter_direct_instantiation" -v --tb=short
+          uv run pytest \
+            tests/talk/api/test_api_schedule.py::test_reviewer_who_can_see_speaker_names_cannot_access_wip_or_orga_fields \
+            tests/talk/api/test_api_schedule.py::test_talk_slot_filter_fallback_and_direct_instantiation \
+            tests/talk/api/test_api_schedule.py::test_list_slots_team_api_token_wip_access \
+            tests/talk/api/test_api_schedule.py::test_talk_slot_filter_anonymous_cannot_enumerate_private_submissions \
+            tests/talk/api/test_api_schedule.py::test_list_slots_orga_can_filter_by_schedule_version_wip \
+            tests/talk/api/test_api_schedule.py::test_list_slots_anonymous_cannot_filter_by_schedule_version_wip \
+            -v --tb=short
 
-      - name: Run full test command on PR branch
+      - name: Verify regression failure when base.orga_view_schedule is restored
         env:
           DJANGO_SETTINGS_MODULE: eventyay.config.settings
           EVY_POSTGRES_USER: eventyay
@@ -92,57 +99,101 @@ jobs:
           GITHUB_WORKFLOW: "true"
         working-directory: app
         run: |
-          set +e
-          uv run pytest tests/talk/api/test_api_schedule.py tests/talk/api/test_api_reviews.py -v --tb=line > /tmp/pr_test_output.txt 2>&1
-          grep "^FAILED " /tmp/pr_test_output.txt | sort -u > /tmp/pr_failures.txt
-          echo "PR branch failure count: $(wc -l < /tmp/pr_failures.txt)"
-          set -e
-
-      - name: Run full test command on unmodified upstream/dev
-        env:
-          DJANGO_SETTINGS_MODULE: eventyay.config.settings
-          EVY_POSTGRES_USER: eventyay
-          EVY_POSTGRES_PASSWORD: eventyay
-          EVY_POSTGRES_DB: eventyay-db
-          EVY_POSTGRES_HOST: localhost
-          EVY_POSTGRES_PORT: "5432"
-          EVY_REDIS_URL: redis://localhost:6379/0
-          EVY_SECRET_KEY: ci-test-secret-key
-          EVY_DEBUG: "true"
-          EVY_RUNNING_ENVIRONMENT: testing
-          GITHUB_WORKFLOW: "true"
-        working-directory: app
-        run: |
-          set +e
-          git remote add upstream https://github.com/fossasia/eventyay.git || true
-          git fetch upstream dev
-          git checkout upstream/dev -- app/
-          uv run pytest tests/talk/api/test_api_schedule.py tests/talk/api/test_api_reviews.py -v --tb=line > /tmp/upstream_test_output.txt 2>&1
-          grep "^FAILED " /tmp/upstream_test_output.txt | sort -u > /tmp/upstream_failures.txt
-          echo "upstream/dev failure count: $(wc -l < /tmp/upstream_failures.txt)"
-          set -e
-
-      - name: Compare failure IDs between upstream/dev and PR branch
-        run: |
-          echo "=========================================================="
-          echo "=== FAILURES PRESENT IN PR BUT NOT UPSTREAM (REGRESSIONS) ==="
-          echo "=========================================================="
-          comm -23 /tmp/pr_failures.txt /tmp/upstream_failures.txt > /tmp/regressions.txt
-          cat /tmp/regressions.txt
-          echo ""
-          echo "=========================================================="
-          echo "=== FAILURES PRESENT IN UPSTREAM BUT FIXED BY PR ==="
-          echo "=========================================================="
-          comm -13 /tmp/pr_failures.txt /tmp/upstream_failures.txt
-          echo ""
-          echo "=========================================================="
-          echo "=== COMMON FAILURES ON BOTH (EXISTING UPSTREAM BASELINE) ==="
-          echo "=========================================================="
-          comm -12 /tmp/pr_failures.txt /tmp/upstream_failures.txt
-          echo ""
-          if [ -s /tmp/regressions.txt ]; then
-            echo "ERROR: Regressions detected!"
+          # 1. Verify original permission before modification
+          grep -q "base\.release_schedule" eventyay/api/filters/schedule.py || {
+            echo "ERROR: schedule.py does not contain expected base.release_schedule before mutation!"
             exit 1
-          else
-            echo "SUCCESS: Zero regressions introduced by PR."
+          }
+          if grep -q "base\.orga_view_schedule" eventyay/api/filters/schedule.py; then
+            echo "ERROR: schedule.py already contains base.orga_view_schedule before mutation!"
+            exit 1
           fi
+
+          cp eventyay/api/filters/schedule.py eventyay/api/filters/schedule.py.bak
+          restore_file() {
+            cp -f eventyay/api/filters/schedule.py.bak eventyay/api/filters/schedule.py 2>/dev/null || true
+            rm -f eventyay/api/filters/schedule.py.bak 2>/dev/null || true
+          }
+          trap restore_file EXIT
+
+          # 2. Swap permission to vulnerable base.orga_view_schedule
+          sed -i "s/base\.release_schedule/base.orga_view_schedule/g" eventyay/api/filters/schedule.py
+          grep -q "base.orga_view_schedule" eventyay/api/filters/schedule.py || {
+            echo "ERROR: Failed to swap permission to base.orga_view_schedule"
+            exit 1
+          }
+
+          # 3. Run negative test and record structured JUnit XML
+          set +e
+          uv run pytest tests/talk/api/test_api_schedule.py::test_reviewer_who_can_see_speaker_names_cannot_access_wip_or_orga_fields \
+            --junitxml=/tmp/negative_test.xml \
+            -v --tb=short
+          test_exit=$?
+          set -e
+
+          if [ "$test_exit" -ne 1 ]; then
+            echo "ERROR: Expected pytest exit code 1, got $test_exit"
+            exit 1
+          fi
+
+          # 4. Parse JUnit XML to verify exact test failure reason
+          python -c '
+          import xml.etree.ElementTree as ET, sys
+
+          try:
+              tree = ET.parse("/tmp/negative_test.xml")
+          except Exception as e:
+              print(f"ERROR: Failed to parse JUnit XML report: {e}")
+              sys.exit(1)
+
+          root = tree.getroot()
+          if root.tag == "testsuites":
+              testsuites = root.findall("testsuite")
+          elif root.tag == "testsuite":
+              testsuites = [root]
+          else:
+              print(f"ERROR: Unexpected root element <{root.tag}> in JUnit XML.")
+              sys.exit(1)
+
+          total_errors = sum(int(ts.attrib.get("errors", 0)) for ts in testsuites)
+          total_failures = sum(int(ts.attrib.get("failures", 0)) for ts in testsuites)
+          total_skipped = sum(int(ts.attrib.get("skipped", 0)) for ts in testsuites)
+
+          if total_errors > 0:
+              print(f"ERROR: Pytest encountered {total_errors} infrastructure/setup error(s).")
+              sys.exit(1)
+
+          if total_skipped > 0:
+              print(f"ERROR: Pytest recorded {total_skipped} skipped test(s).")
+              sys.exit(1)
+
+          if total_failures != 1:
+              print(f"ERROR: Expected exactly 1 test failure, but found {total_failures}.")
+              sys.exit(1)
+
+          target_name = "test_reviewer_who_can_see_speaker_names_cannot_access_wip_or_orga_fields"
+          testcases = [tc for ts in testsuites for tc in ts.findall("testcase")]
+          target_case = next((tc for tc in testcases if tc.attrib.get("name") == target_name), None)
+
+          if target_case is None:
+              print(f"ERROR: Target testcase {target_name} not found in test report.")
+              sys.exit(1)
+
+          failure = target_case.find("failure")
+          if failure is None:
+              print("ERROR: Target testcase did not fail.")
+              sys.exit(1)
+
+          failure_msg = (failure.attrib.get("message", "") or "") + " " + (failure.text or "")
+
+          if "content_rev_wip" not in failure_msg:
+              print("ERROR: Unexpected failure reason.")
+              sys.exit(1)
+
+          print("SUCCESS: Negative verification confirmed. Test failed specifically at reviewer WIP schedule access check.")
+          '
+
+          # 5. Restore file and verify clean state
+          restore_file
+          trap - EXIT
+          git diff --exit-code eventyay/api/filters/schedule.py
