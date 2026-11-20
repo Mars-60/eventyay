@@ -1075,14 +1075,14 @@ def test_talk_slot_filter_fallback_and_direct_instantiation(
     assert response.status_code == 200, content
     assert {s["id"] for s in content["results"]} == {old_slot.pk}
 
-    # 3. Anonymous ?schedule=<wip_pk> returns NO WIP slots
+    # 3. Anonymous ?schedule=<wip_pk> returns NO WIP slots (choice validation failure)
     response = client.get(
         event.api_urls.slots + f"?schedule={event.wip_schedule.pk}",
         follow=True,
     )
     content = json.loads(response.text)
-    assert response.status_code == 200, content
-    assert content["count"] == 0
+    assert response.status_code == 400, content
+    assert "schedule" in content
 
     # Organizer positive control: organizer CAN access WIP slots by schedule pk
     response = client.get(

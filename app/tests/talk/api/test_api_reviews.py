@@ -621,7 +621,7 @@ def test_reviewer_cannot_enumerate_inaccessible_submission_or_speaker(
         # Create an inaccessible submission (authored by the reviewer, so review is excluded)
         inaccessible_speaker = User.objects.create(
             email="inaccessible_speaker@example.com",
-            name="Inaccessible Speaker",
+            fullname="Inaccessible Speaker",
         )
         inaccessible_sub = Submission.objects.create(
             event=event,
