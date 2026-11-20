@@ -7,6 +7,22 @@ from eventyay.base.models.submission import Submission
 from eventyay.talk_rules.submission import get_reviewable_submissions
 
 
+def has_orga_review_permission(request, event):
+    if not request or not event:
+        return False
+    user = getattr(request, "user", None)
+    if user and hasattr(user, "has_perm") and user.has_perm("base.orga_update_submission", event):
+        return True
+    auth = getattr(request, "auth", None)
+    if auth and hasattr(auth, "get_event_permission_set"):
+        organizer = getattr(event, "organizer", None)
+        if organizer:
+            permset = auth.get_event_permission_set(organizer, event)
+            if "can_change_submissions" in permset:
+                return True
+    return False
+
+
 def get_review_visible_submissions(event, user):
     if not event or not user or user.is_anonymous:
         return Submission.objects.none()
@@ -43,10 +59,7 @@ with scopes_disabled():
                 with scope(event=self.event):
                     super().__init__(*args, **kwargs)
                     user = getattr(request, "user", None)
-                    if user and (
-                        user.has_perm("base.orga_view_submission", self.event)
-                        or user.has_perm("base.orga_list_submission", self.event)
-                    ):
+                    if has_orga_review_permission(request, self.event):
                         submissions = self.event.submissions.all()
                     elif user and not user.is_anonymous:
                         submissions = get_review_visible_submissions(self.event, user)
